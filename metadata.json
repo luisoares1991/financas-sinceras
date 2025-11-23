@@ -1,6 +1,6 @@
 {
   "name": "Finanças Sinceras",
-  "description": "Um assistente financeiro pessoal com painel intuitivo, leitura de recibos por IA e um consultor que manda a real sobre seus gastos.",
+  "description": "Seu assistente financeiro pessoal movido a IA. Organiza seus gastos, lê notas fiscais automaticamente com visão computacional e oferece consultoria financeira com uma personalidade 'sincera' única.",
   "requestFramePermissions": [
     "camera"
   ]
