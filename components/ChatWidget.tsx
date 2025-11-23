@@ -1,15 +1,15 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { MessageCircle, X, Send, Bot, Zap, ExternalLink } from 'lucide-react';
-import { ChatMessage, Persona, MarketItem } from '../types';
+import { ChatMessage, Persona, MarketItem, Transaction } from '../types';
 import { getFinancialAdvice } from '../services/geminiService';
 
 interface ChatWidgetProps {
   stats: { income: number; expense: number; topCategory: string };
   marketItems: MarketItem[];
+  transactions: Transaction[]; // <--- NOVO PROP
 }
 
-const ChatWidget: React.FC<ChatWidgetProps> = ({ stats, marketItems }) => {
+const ChatWidget: React.FC<ChatWidgetProps> = ({ stats, marketItems, transactions }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [persona, setPersona] = useState<Persona>(Persona.SINCERO);
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -40,7 +40,8 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({ stats, marketItems }) => {
           parts: [{ text: m.text }]
       }));
 
-      const { text, sources } = await getFinancialAdvice(userMsg.text, history, persona, stats, marketItems);
+      // AGORA PASSAMOS AS TRANSAÇÕES AQUI
+      const { text, sources } = await getFinancialAdvice(userMsg.text, history, persona, stats, marketItems, transactions);
       
       const botMsg: ChatMessage = { 
         id: (Date.now() + 1).toString(), 

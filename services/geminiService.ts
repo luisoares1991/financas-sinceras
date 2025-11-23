@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import { Transaction, Persona, MarketItem } from "../types";
 
@@ -174,7 +173,8 @@ export const getFinancialAdvice = async (
   history: { role: string, parts: { text: string }[] }[],
   persona: Persona,
   stats: { income: number; expense: number; topCategory: string },
-  marketItems: MarketItem[] = []
+  marketItems: MarketItem[] = [],
+  transactions: Transaction[] = [] // <--- NOVO PARÂMETRO
 ): Promise<{ text: string; sources?: { title: string; uri: string }[] }> => {
   let systemInstruction = "";
   
@@ -196,8 +196,13 @@ export const getFinancialAdvice = async (
 
   // Build market context string
   const marketContext = marketItems.length > 0 
-    ? `Current Market/Grocery Items History: ${JSON.stringify(marketItems.slice(-50).map(i => ({ name: i.name, price: i.price, date: i.date })))}`
+    ? `Current Market/Grocery Items History (Detailed): ${JSON.stringify(marketItems.slice(-50).map(i => ({ name: i.name, price: i.price, date: i.date })))}`
     : "No detailed market items available yet.";
+
+  // Build transactions context string (NOVO)
+  const transactionsContext = transactions.length > 0
+    ? `Current General Transactions History (Summary): ${JSON.stringify(transactions.slice(-50).map(t => ({ date: t.date, desc: t.description, amount: t.amount, cat: t.category, type: t.type })))}`
+    : "No general transactions available yet.";
 
   if (persona === Persona.FORMAL) {
     systemInstruction = `You are a professional, polite, and objective financial consultant. 
@@ -206,8 +211,13 @@ export const getFinancialAdvice = async (
     ${appDocs}
 
     Current User Stats for this month: Income: ${stats.income}, Expense: ${stats.expense}, Top Expense Category: ${stats.topCategory}.
-    ${marketContext}
-    If the user asks about specific products (like beer, rice, meat), check the Market Items History.
+    
+    DATA SOURCES:
+    1. ${transactionsContext}
+    2. ${marketContext}
+
+    If the user asks about specific products (like beer, rice), check the Market Items History.
+    If the user asks about general spending (Uber, Electricity, Salary), check the General Transactions History.
     If asked about prices or market trends, USE GOOGLE SEARCH to find real-time information.
     If asked how to use the app, refer to the APP DOCUMENTATION above.`;
   } else {
@@ -218,8 +228,13 @@ export const getFinancialAdvice = async (
     ${appDocs}
 
     Current User Stats for this month: Income: ${stats.income}, Expense: ${stats.expense}, Top Expense Category: ${stats.topCategory}.
-    ${marketContext}
+    
+    DATA SOURCES:
+    1. ${transactionsContext}
+    2. ${marketContext}
+
     If the user asks about specific products (like "how much did I spend on beer?"), look at the Market Items History and roast them if it's high.
+    If the user asks about general spending (like "Uber", "Ifood", "Rent"), look at the General Transactions History.
     If asked about prices, USE GOOGLE SEARCH to verify if they paid too much and roast them if they did.
     If asked how to use the app, explain it simply but with your sarcastic flair.
     Example: "You spent 500 on food? Do you think you are a king? Learn to cook!"`;

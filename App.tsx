@@ -358,7 +358,11 @@ const App: React.FC = () => {
         </section>
       </main>
 
-      <ChatWidget stats={{...fullMonthStats, topCategory}} marketItems={marketItems} />
+      <ChatWidget 
+        stats={{...fullMonthStats, topCategory}} 
+        marketItems={marketItems} 
+        transactions={monthlyTransactions} // <--- AGORA A IA VÊ TUDO!
+      />
       
       {isFormOpen && (
         <TransactionForm 
