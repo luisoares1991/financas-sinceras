@@ -9,7 +9,14 @@ import BatchEntryModal from './components/BatchEntryModal';
 import MarketSubApp from './components/MarketSubApp';
 import LoginScreen from './components/LoginScreen';
 import { Transaction, DashboardStats, MarketItem, User } from './types';
-import { Plus, Filter, AlertTriangle, ListPlus, X } from 'lucide-react';
+import { Plus, Filter, AlertTriangle, ListPlus, X, Loader2 } from 'lucide-react';
+
+// Firebase Imports
+import { db } from './services/firebase';
+import { 
+  collection, doc, setDoc, addDoc, deleteDoc, updateDoc, 
+  query, onSnapshot, orderBy, getDoc 
+} from 'firebase/firestore';
 
 // Defaults
 const DEFAULT_INCOME_CATS = ['Salário', 'Investimentos', 'Presente', 'Outros'];
@@ -22,31 +29,17 @@ const App: React.FC = () => {
     return saved ? JSON.parse(saved) : null;
   });
   
-  // --- Data State (with LocalStorage persistence) ---
-  
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  // --- Data State ---
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>(() => {
     return (localStorage.getItem('fs_theme') as 'light' | 'dark' | 'system') || 'system';
   });
   
-  const [transactions, setTransactions] = useState<Transaction[]>(() => {
-    const saved = localStorage.getItem('fs_transactions');
-    return saved ? JSON.parse(saved) : [];
-  });
-
-  const [marketItems, setMarketItems] = useState<MarketItem[]>(() => {
-    const saved = localStorage.getItem('fs_market_items');
-    return saved ? JSON.parse(saved) : [];
-  });
-
-  const [incomeCategories, setIncomeCategories] = useState<string[]>(() => {
-    const saved = localStorage.getItem('fs_income_cats');
-    return saved ? JSON.parse(saved) : DEFAULT_INCOME_CATS;
-  });
-
-  const [expenseCategories, setExpenseCategories] = useState<string[]>(() => {
-    const saved = localStorage.getItem('fs_expense_cats');
-    return saved ? JSON.parse(saved) : DEFAULT_EXPENSE_CATS;
-  });
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [marketItems, setMarketItems] = useState<MarketItem[]>([]);
+  const [incomeCategories, setIncomeCategories] = useState<string[]>(DEFAULT_INCOME_CATS);
+  const [expenseCategories, setExpenseCategories] = useState<string[]>(DEFAULT_EXPENSE_CATS);
 
   const [currentDate, setCurrentDate] = useState(new Date());
   const [showGuestBanner, setShowGuestBanner] = useState(true);
@@ -63,8 +56,9 @@ const App: React.FC = () => {
   const [typeFilter, setTypeFilter] = useState<'all' | 'income' | 'expense'>('all');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
 
-  // --- Persistence Effects ---
+  // --- CLOUD SYNC & PERSISTENCE ---
 
+  // 1. Load User & Theme
   useEffect(() => {
     if (user) localStorage.setItem('fs_user', JSON.stringify(user));
     else localStorage.removeItem('fs_user');
@@ -84,10 +78,290 @@ const App: React.FC = () => {
     applyTheme();
   }, [theme]);
 
-  useEffect(() => localStorage.setItem('fs_transactions', JSON.stringify(transactions)), [transactions]);
-  useEffect(() => localStorage.setItem('fs_market_items', JSON.stringify(marketItems)), [marketItems]);
-  useEffect(() => localStorage.setItem('fs_income_cats', JSON.stringify(incomeCategories)), [incomeCategories]);
-  useEffect(() => localStorage.setItem('fs_expense_cats', JSON.stringify(expenseCategories)), [expenseCategories]);
+  // 2. Data Synchronization Logic
+  useEffect(() => {
+    if (!user) return;
+
+    // GUEST MODE: Read from LocalStorage
+    if (user.isGuest) {
+        const savedTrans = localStorage.getItem('fs_transactions');
+        const savedMarket = localStorage.getItem('fs_market_items');
+        const savedInCats = localStorage.getItem('fs_income_cats');
+        const savedExCats = localStorage.getItem('fs_expense_cats');
+
+        if (savedTrans) setTransactions(JSON.parse(savedTrans));
+        if (savedMarket) setMarketItems(JSON.parse(savedMarket));
+        if (savedInCats) setIncomeCategories(JSON.parse(savedInCats));
+        if (savedExCats) setExpenseCategories(JSON.parse(savedExCats));
+        return;
+    }
+
+    // CLOUD MODE: Real-time Listeners
+    setIsSyncing(true);
+    const userRef = doc(db, 'users', user.id);
+    const transRef = collection(userRef, 'transactions');
+    const marketRef = collection(userRef, 'marketItems');
+
+    // Load Settings (Categories)
+    getDoc(userRef).then((docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data.incomeCategories) setIncomeCategories(data.incomeCategories);
+        if (data.expenseCategories) setExpenseCategories(data.expenseCategories);
+      } else {
+        // Create user doc if first login
+        setDoc(userRef, { 
+           email: user.email, 
+           name: user.name,
+           incomeCategories: DEFAULT_INCOME_CATS,
+           expenseCategories: DEFAULT_EXPENSE_CATS
+        }, { merge: true });
+      }
+    });
+
+    // Listen to Transactions
+    const qTrans = query(transRef, orderBy('date', 'desc'));
+    const unsubscribeTrans = onSnapshot(qTrans, (snapshot) => {
+       const loaded = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Transaction));
+       setTransactions(loaded);
+       setIsSyncing(false);
+    });
+
+    // Listen to Market Items
+    const qMarket = query(marketRef, orderBy('date', 'desc'));
+    const unsubscribeMarket = onSnapshot(qMarket, (snapshot) => {
+       const loaded = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as MarketItem));
+       setMarketItems(loaded);
+    });
+
+    return () => {
+        unsubscribeTrans();
+        unsubscribeMarket();
+    };
+  }, [user]);
+
+  // 3. LocalStorage Fallback Saver (Only runs for Guest)
+  useEffect(() => {
+     if (user?.isGuest) {
+        localStorage.setItem('fs_transactions', JSON.stringify(transactions));
+        localStorage.setItem('fs_market_items', JSON.stringify(marketItems));
+        localStorage.setItem('fs_income_cats', JSON.stringify(incomeCategories));
+        localStorage.setItem('fs_expense_cats', JSON.stringify(expenseCategories));
+     }
+  }, [transactions, marketItems, incomeCategories, expenseCategories, user]);
+
+
+  // --- Handlers ---
+
+  const handleLogin = (userData: User) => {
+    setUser(userData);
+  };
+
+  const handleLogout = () => {
+    setUser(null);
+    setTransactions([]);
+    setMarketItems([]);
+    setIsSettingsOpen(false);
+  };
+
+  const handleSaveTransaction = async (t: Transaction) => {
+    // Logic split: Guest vs Cloud
+    if (user?.isGuest) {
+        setTransactions(prev => {
+            const index = prev.findIndex(item => item.id === t.id);
+            if (index >= 0) {
+                const newTrans = [...prev];
+                newTrans[index] = t;
+                return newTrans;
+            }
+            return [t, ...prev];
+        });
+    } else if (user && !user.isGuest) {
+        // Cloud Save
+        const userRef = doc(db, 'users', user.id);
+        const transCol = collection(userRef, 'transactions');
+        
+        // Check if update or new (using a temp ID logic for new ones from form usually works, but better to check)
+        // Since ID is generated by us or Firestore, let's check if it exists in our local list to decide update vs add
+        // Actually, simplest is setDoc with merge
+        await setDoc(doc(transCol, t.id), t, { merge: true });
+    }
+    setIsFormOpen(false);
+    setEditingTransaction(null);
+  };
+
+  const handleSaveBatch = async (newTransactions: Transaction[]) => {
+    if (user?.isGuest) {
+        setTransactions(prev => [...newTransactions, ...prev]);
+    } else if (user && !user.isGuest) {
+        const userRef = doc(db, 'users', user.id);
+        const transCol = collection(userRef, 'transactions');
+        const promises = newTransactions.map(t => setDoc(doc(transCol, t.id), t));
+        await Promise.all(promises);
+    }
+  };
+
+  const handleSaveMarketReceipt = async (transaction: Transaction, items: MarketItem[]) => {
+    if (user?.isGuest) {
+        setTransactions(prev => [transaction, ...prev]);
+        // Assign receiptId to items
+        const itemsWithId = items.map(item => ({ ...item, receiptId: transaction.id }));
+        setMarketItems(prev => [...itemsWithId, ...prev]);
+    } else if (user && !user.isGuest) {
+        const userRef = doc(db, 'users', user.id);
+        
+        // Save Transaction
+        await setDoc(doc(collection(userRef, 'transactions'), transaction.id), transaction);
+
+        // Save Items
+        const marketCol = collection(userRef, 'marketItems');
+        const promises = items.map(item => {
+             const itemWithReceiptId = { ...item, receiptId: transaction.id };
+             return setDoc(doc(marketCol, item.id), itemWithReceiptId);
+        });
+        await Promise.all(promises);
+    }
+    alert("Nota fiscal salva com sucesso!");
+    setIsMarketOpen(false);
+  };
+
+  const deleteTransaction = async (id: string) => {
+    if (user?.isGuest) {
+        setTransactions(prev => prev.filter(t => t.id !== id));
+    } else if (user && !user.isGuest) {
+        const userRef = doc(db, 'users', user.id);
+        await deleteDoc(doc(collection(userRef, 'transactions'), id));
+    }
+  };
+
+  const handleClearAllData = async () => {
+    if (user?.isGuest) {
+        setTransactions([]);
+        setMarketItems([]);
+    } else if (user && !user.isGuest) {
+        alert("No modo online, apagar tudo deve ser feito manualmente por segurança.");
+        return;
+    }
+    setIsClearAllConfirmOpen(false);
+    setIsSettingsOpen(false);
+  };
+
+  // Categories management for Cloud
+  const updateCloudCategories = async (type: 'income' | 'expense', newCats: string[]) => {
+      if (!user || user.isGuest) return;
+      const userRef = doc(db, 'users', user.id);
+      await updateDoc(userRef, {
+          [type === 'income' ? 'incomeCategories' : 'expenseCategories']: newCats
+      });
+  };
+
+  const handleAddCategory = (type: 'income' | 'expense', name: string) => {
+    if (type === 'income') {
+      if (!incomeCategories.includes(name)) {
+          const newCats = [...incomeCategories, name];
+          setIncomeCategories(newCats);
+          updateCloudCategories('income', newCats);
+      }
+    } else {
+      if (!expenseCategories.includes(name)) {
+          const newCats = [...expenseCategories, name];
+          setExpenseCategories(newCats);
+          updateCloudCategories('expense', newCats);
+      }
+    }
+  };
+
+  const handleRemoveCategory = (type: 'income' | 'expense', name: string) => {
+    if (type === 'income') {
+        const newCats = incomeCategories.filter(c => c !== name);
+        setIncomeCategories(newCats);
+        updateCloudCategories('income', newCats);
+    } else {
+        const newCats = expenseCategories.filter(c => c !== name);
+        setExpenseCategories(newCats);
+        updateCloudCategories('expense', newCats);
+    }
+  };
+
+  const handleRenameCategory = (type: 'income' | 'expense', oldName: string, newName: string) => {
+    // This is tricky in NoSQL as we need to update all transactions with that category
+    // For now, let's just update the list, updating docs is heavy operation
+    if (type === 'income') {
+        const newCats = incomeCategories.map(c => c === oldName ? newName : c);
+        setIncomeCategories(newCats);
+        updateCloudCategories('income', newCats);
+    } else {
+        const newCats = expenseCategories.map(c => c === oldName ? newName : c);
+        setExpenseCategories(newCats);
+        updateCloudCategories('expense', newCats);
+    }
+    // Local state update for transactions (visual only for cloud, guest saves it)
+    setTransactions(prev => prev.map(t => (t.type === type && t.category === oldName) ? { ...t, category: newName } : t));
+  };
+
+  // CSV Handlers (Keep existing logic, mostly local processing)
+  const handleExportCSV = () => {
+    if (transactions.length === 0) {
+      alert("Não há dados para exportar.");
+      return;
+    }
+    const headers = ["Data", "Descrição", "Categoria", "Tipo", "Valor"];
+    const rows = transactions.map(t => [
+      new Date(t.date).toLocaleDateString('pt-BR'),
+      `"${t.description.replace(/"/g, '""')}"`,
+      `"${t.category.replace(/"/g, '""')}"`,
+      t.type === 'income' ? 'Entrada' : 'Saída',
+      t.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })
+    ]);
+    const csvContent = [headers.join(';'), ...rows.map(row => row.join(';'))].join('\n');
+    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `backup_financas_${new Date().toISOString().split('T')[0]}.csv`;
+    link.click();
+  };
+
+  const handleImportCSV = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if(!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+        constHZ
+        const text = evt.target?.result as string;
+        const lines = text.split('\n');
+        const newTrans: Transaction[] = [];
+        lines.forEach((line, idx) => {
+            if (idx === 0) return; 
+            const separator = line.includes(';') ? ';' : ',';
+            const cols = line.split(separator);
+            if (cols.length >= 3) {
+                 let valStr = cols[cols.length - 1]; 
+                 if (valStr && valStr.includes(',')) valStr = valStr.replace(/\./g, '').replace(',', '.');
+                 const amount = Math.abs(parseFloat(valStr));
+                 const isExpense = parseFloat(valStr) < 0 || (cols[3] && cols[3].toLowerCase().includes('saída'));
+                 if (!isNaN(amount)) {
+                     newTrans.push({
+                         id: crypto.randomUUID(),
+                         date: cols[0] ? new Date(cols[0].split('/').reverse().join('-')).toISOString() : new Date().toISOString(), // Try to parse PT-BR date
+                         description: cols[1]?.replace(/"/g, '') || 'Importado',
+                         category: cols[2]?.replace(/"/g, '') || 'Importado',
+                         type: isExpense ? 'expense' : 'income',
+                         amount: amount
+                     });
+                 }
+            }
+        });
+        if (newTrans.length > 0) {
+            // Use the batch handler to decide where to save
+            handleSaveBatch(newTrans);
+            alert(`${newTrans.length} transações importadas com sucesso!`);
+            setIsSettingsOpen(false);
+        } else alert("Erro ao ler arquivo.");
+    };
+    reader.readAsText(file);
+  };
+
 
   // --- Computed Values ---
 
@@ -99,7 +373,6 @@ const App: React.FC = () => {
     }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   }, [transactions, currentDate]);
 
-  // Filter logic for Display
   const filteredTransactions = useMemo(() => {
       return monthlyTransactions.filter(t => {
           const matchesType = typeFilter === 'all' ? true : t.type === typeFilter;
@@ -131,133 +404,6 @@ const App: React.FC = () => {
       return sorted.length > 0 ? sorted[0][0] : "Nenhuma";
   }, [monthlyTransactions]);
 
-  // --- Handlers ---
-
-  const handleLogin = (userData: User) => {
-    setUser(userData);
-  };
-
-  const handleLogout = () => {
-    setUser(null);
-    setIsSettingsOpen(false);
-  };
-
-  const handleSaveTransaction = (t: Transaction) => {
-    setTransactions(prev => {
-      const index = prev.findIndex(item => item.id === t.id);
-      if (index >= 0) {
-        const newTrans = [...prev];
-        newTrans[index] = t;
-        return newTrans;
-      }
-      return [t, ...prev];
-    });
-    setIsFormOpen(false);
-    setEditingTransaction(null);
-  };
-
-  const handleSaveBatch = (newTransactions: Transaction[]) => {
-    setTransactions(prev => [...newTransactions, ...prev]);
-  };
-
-  const handleSaveMarketReceipt = (transaction: Transaction, items: MarketItem[]) => {
-    const receiptId = crypto.randomUUID();
-    setTransactions(prev => [transaction, ...prev]);
-    const itemsWithId = items.map(item => ({ ...item, receiptId: receiptId }));
-    setMarketItems(prev => [...itemsWithId, ...prev]);
-    alert("Nota fiscal salva com sucesso!");
-    setIsMarketOpen(false);
-  };
-
-  const deleteTransaction = (id: string) => {
-    setTransactions(prev => prev.filter(t => t.id !== id));
-  };
-
-  const handleClearAllData = () => {
-    setTransactions([]);
-    setMarketItems([]);
-    setIsClearAllConfirmOpen(false);
-    setIsSettingsOpen(false);
-  };
-
-  const handleAddCategory = (type: 'income' | 'expense', name: string) => {
-    if (type === 'income') {
-      if (!incomeCategories.includes(name)) setIncomeCategories([...incomeCategories, name]);
-    } else {
-      if (!expenseCategories.includes(name)) setExpenseCategories([...expenseCategories, name]);
-    }
-  };
-
-  const handleRemoveCategory = (type: 'income' | 'expense', name: string) => {
-    if (type === 'income') setIncomeCategories(prev => prev.filter(c => c !== name));
-    else setExpenseCategories(prev => prev.filter(c => c !== name));
-  };
-
-  const handleRenameCategory = (type: 'income' | 'expense', oldName: string, newName: string) => {
-    if (type === 'income') setIncomeCategories(prev => prev.map(c => c === oldName ? newName : c));
-    else setExpenseCategories(prev => prev.map(c => c === oldName ? newName : c));
-    setTransactions(prev => prev.map(t => (t.type === type && t.category === oldName) ? { ...t, category: newName } : t));
-  };
-
-  const handleExportCSV = () => {
-    if (transactions.length === 0) {
-      alert("Não há dados para exportar.");
-      return;
-    }
-    const headers = ["Data", "Descrição", "Categoria", "Tipo", "Valor"];
-    const rows = transactions.map(t => [
-      new Date(t.date).toLocaleDateString('pt-BR'),
-      `"${t.description.replace(/"/g, '""')}"`,
-      `"${t.category.replace(/"/g, '""')}"`,
-      t.type === 'income' ? 'Entrada' : 'Saída',
-      t.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })
-    ]);
-    const csvContent = [headers.join(';'), ...rows.map(row => row.join(';'))].join('\n');
-    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `backup_financas_${new Date().toISOString().split('T')[0]}.csv`;
-    link.click();
-  };
-
-  const handleImportCSV = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if(!file) return;
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-        const text = evt.target?.result as string;
-        const lines = text.split('\n');
-        const newTrans: Transaction[] = [];
-        lines.forEach((line, idx) => {
-            if (idx === 0) return; 
-            const separator = line.includes(';') ? ';' : ',';
-            const cols = line.split(separator);
-            if (cols.length >= 3) {
-                 let valStr = cols[cols.length - 1]; 
-                 if (valStr && valStr.includes(',')) valStr = valStr.replace(/\./g, '').replace(',', '.');
-                 const amount = Math.abs(parseFloat(valStr));
-                 const isExpense = parseFloat(valStr) < 0 || (cols[3] && cols[3].toLowerCase().includes('saída'));
-                 if (!isNaN(amount)) {
-                     newTrans.push({
-                         id: crypto.randomUUID(),
-                         date: cols[0] ? new Date().toISOString() : new Date().toISOString(),
-                         description: cols[1]?.replace(/"/g, '') || 'Importado',
-                         category: cols[2]?.replace(/"/g, '') || 'Importado',
-                         type: isExpense ? 'expense' : 'income',
-                         amount: amount
-                     });
-                 }
-            }
-        });
-        if (newTrans.length > 0) {
-            setTransactions(prev => [...newTrans, ...prev]);
-            alert(`${newTrans.length} transações importadas com sucesso!`);
-            setIsSettingsOpen(false);
-        } else alert("Erro ao ler arquivo.");
-    };
-    reader.readAsText(file);
-  };
 
   if (!user) {
     return <LoginScreen onLogin={handleLogin} />;
@@ -272,12 +418,19 @@ const App: React.FC = () => {
         setCurrentDate={setCurrentDate}
       />
 
+      {/* Cloud Sync Indicator */}
+      {isSyncing && (
+        <div className="fixed top-20 right-4 z-50 bg-blue-600 text-white px-3 py-1 rounded-full text-xs flex items-center gap-2 shadow-lg animate-pulse">
+            <Loader2 className="w-3 h-3 animate-spin" /> Sincronizando...
+        </div>
+      )}
+
       {/* Guest Warning Banner */}
       {user.isGuest && showGuestBanner && (
         <div className="bg-orange-100 dark:bg-orange-900/30 border-b border-orange-200 dark:border-orange-800 px-4 py-2 flex items-center justify-between animate-in slide-in-from-top-2">
           <div className="flex items-center gap-2 text-orange-700 dark:text-orange-300 text-sm">
              <AlertTriangle className="w-4 h-4" />
-             <span>Você está em modo Convidado. Seus dados não estão salvos na nuvem. Faça backup regularmente.</span>
+             <span>Modo Convidado: Seus dados estão apenas neste dispositivo.</span>
           </div>
           <button onClick={() => setShowGuestBanner(false)} className="text-orange-700 dark:text-orange-300 hover:text-orange-900 p-1">
             <X className="w-4 h-4" />
@@ -361,7 +514,7 @@ const App: React.FC = () => {
       <ChatWidget 
         stats={{...fullMonthStats, topCategory}} 
         marketItems={marketItems} 
-        transactions={monthlyTransactions} // <--- AGORA A IA VÊ TUDO!
+        transactions={monthlyTransactions} 
       />
       
       {isFormOpen && (
@@ -419,7 +572,7 @@ const App: React.FC = () => {
                 Apagar TUDO?
               </h3>
               <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
-                Isso é irreversível. Todos os seus dados serão perdidos.
+                Isso apagará apenas os dados locais. Para dados na nuvem, fale com o suporte.
               </p>
               <div className="flex gap-3 w-full">
                 <button 
