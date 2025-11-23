@@ -1,0 +1,7 @@
+{
+  "name": "Finanças Sinceras",
+  "description": "Um assistente financeiro pessoal com painel intuitivo, leitura de recibos por IA e um consultor que manda a real sobre seus gastos.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
