@@ -174,7 +174,7 @@ export const getFinancialAdvice = async (
   persona: Persona,
   stats: { income: number; expense: number; topCategory: string },
   marketItems: MarketItem[] = [],
-  transactions: Transaction[] = [] // <--- NOVO PARÂMETRO
+  transactions: Transaction[] = []
 ): Promise<{ text: string; sources?: { title: string; uri: string }[] }> => {
   let systemInstruction = "";
   
@@ -199,16 +199,30 @@ export const getFinancialAdvice = async (
     ? `Current Market/Grocery Items History (Detailed): ${JSON.stringify(marketItems.slice(-50).map(i => ({ name: i.name, price: i.price, date: i.date })))}`
     : "No detailed market items available yet.";
 
-  // Build transactions context string (NOVO)
+  // Build transactions context string
   const transactionsContext = transactions.length > 0
-    ? `Current General Transactions History (Summary): ${JSON.stringify(transactions.slice(-50).map(t => ({ date: t.date, desc: t.description, amount: t.amount, cat: t.category, type: t.type })))}`
+    ? `Current General Transactions History (Summary): ${JSON.stringify(transactions.slice(-100).map(t => ({ date: t.date, desc: t.description, amount: t.amount, cat: t.category, type: t.type })))}`
     : "No general transactions available yet.";
+
+  // INSTRUÇÕES COMUNS DE BUSCA INTELIGENTE
+  const searchInstructions = `
+  CRITICAL INSTRUCTION FOR DATA RETRIEVAL:
+  When the user asks about a specific spending (e.g., "How much did I spend on McDonalds?", "Uber expenses?"):
+  1. YOU MUST PERFORM A FUZZY SEARCH. Do NOT look for exact matches.
+  2. Match ANY transaction where the 'desc' (description) CONTAINS the user's keyword.
+     - Example: If user asks "McDonalds", MATCH "MCDONALDS SAO PAULO", "BURGER KING VS MCDONALDS", "PG *MCDONALDS".
+     - Example: If user asks "Uber", MATCH "UBER *TRIP", "UBER EATS", "UBER BR".
+  3. Case insensitive matching.
+  4. AGGREGATE (SUM) the amounts of all matching transactions and report the total.
+  5. List the individual transactions found to prove your point.
+  `;
 
   if (persona === Persona.FORMAL) {
     systemInstruction = `You are a professional, polite, and objective financial consultant. 
     Your tone is like a bank manager. Be concise and data-driven.
     
     ${appDocs}
+    ${searchInstructions}
 
     Current User Stats for this month: Income: ${stats.income}, Expense: ${stats.expense}, Top Expense Category: ${stats.topCategory}.
     
@@ -217,7 +231,7 @@ export const getFinancialAdvice = async (
     2. ${marketContext}
 
     If the user asks about specific products (like beer, rice), check the Market Items History.
-    If the user asks about general spending (Uber, Electricity, Salary), check the General Transactions History.
+    If the user asks about general spending (Uber, Electricity, Salary), check the General Transactions History using the fuzzy search rules above.
     If asked about prices or market trends, USE GOOGLE SEARCH to find real-time information.
     If asked how to use the app, refer to the APP DOCUMENTATION above.`;
   } else {
@@ -226,6 +240,7 @@ export const getFinancialAdvice = async (
     If they are doing well, be skeptical.
 
     ${appDocs}
+    ${searchInstructions}
 
     Current User Stats for this month: Income: ${stats.income}, Expense: ${stats.expense}, Top Expense Category: ${stats.topCategory}.
     
@@ -234,7 +249,7 @@ export const getFinancialAdvice = async (
     2. ${marketContext}
 
     If the user asks about specific products (like "how much did I spend on beer?"), look at the Market Items History and roast them if it's high.
-    If the user asks about general spending (like "Uber", "Ifood", "Rent"), look at the General Transactions History.
+    If the user asks about general spending (like "Uber", "Ifood", "Rent"), look at the General Transactions History using FUZZY SEARCH (e.g., match "Uber" in "Uber Trip ...").
     If asked about prices, USE GOOGLE SEARCH to verify if they paid too much and roast them if they did.
     If asked how to use the app, explain it simply but with your sarcastic flair.
     Example: "You spent 500 on food? Do you think you are a king? Learn to cook!"`;
