@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import Header from './components/Header';
 import Dashboard from './components/Dashboard';
 import TransactionForm from './components/TransactionForm';
@@ -9,8 +9,8 @@ import BatchEntryModal from './components/BatchEntryModal';
 import MarketSubApp from './components/MarketSubApp';
 import LoginScreen from './components/LoginScreen';
 import { Transaction, DashboardStats, MarketItem, User } from './types';
-import { Plus, Filter, AlertTriangle, ListPlus, X, Cloud, Loader2 } from 'lucide-react';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { Plus, Filter, AlertTriangle, ListPlus, X, Cloud, Loader2, WifiOff } from 'lucide-react';
+import { doc, setDoc, onSnapshot } from 'firebase/firestore';
 import { db } from './services/firebase';
 
 // Defaults
@@ -51,7 +51,12 @@ const App: React.FC = () => {
 
   const [currentDate, setCurrentDate] = useState(new Date());
   const [showGuestBanner, setShowGuestBanner] = useState(true);
-  const [isCloudLoading, setIsCloudLoading] = useState(false);
+  
+  // Status da Nuvem
+  const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'error'>('synced');
+  
+  // Flag para evitar loop infinito (Cloud -> State -> Cloud)
+  const isRemoteUpdate = useRef(false);
   
   // Modals
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -65,47 +70,56 @@ const App: React.FC = () => {
   const [typeFilter, setTypeFilter] = useState<'all' | 'income' | 'expense'>('all');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
 
-  // --- Cloud Sync Logic ---
+  // --- REAL-TIME SYNC LOGIC (O Grande Segredo) ---
 
-  // 1. CARREGAR dados da nuvem ao logar
+  // 1. ESCUTAR mudanças da nuvem (Real-time Listener)
   useEffect(() => {
-    if (user && !user.isGuest) {
-      setIsCloudLoading(true);
-      const loadFromCloud = async () => {
-        try {
-          const docRef = doc(db, "users", user.id);
-          const docSnap = await getDoc(docRef);
-          
-          if (docSnap.exists()) {
-            const data = docSnap.data();
-            if (data.transactions) setTransactions(data.transactions);
-            if (data.marketItems) setMarketItems(data.marketItems);
-            if (data.incomeCategories) setIncomeCategories(data.incomeCategories);
-            if (data.expenseCategories) setExpenseCategories(data.expenseCategories);
-            console.log("Dados baixados da nuvem!");
-          } else {
-            console.log("Usuário novo ou sem dados na nuvem.");
-          }
-        } catch (error) {
-          console.error("Erro ao carregar da nuvem:", error);
-        } finally {
-          setIsCloudLoading(false);
-        }
-      };
-      loadFromCloud();
-    }
-  }, [user]); // Roda apenas quando o usuário muda (login)
+    if (!user || user.isGuest) return;
 
-  // 2. SALVAR dados na nuvem quando algo mudar
+    setSyncStatus('syncing');
+    
+    // Inscreve-se para ouvir mudanças no documento do usuário
+    const unsubscribe = onSnapshot(doc(db, "users", user.id), (docSnapshot) => {
+      if (docSnapshot.exists()) {
+        const data = docSnapshot.data();
+        
+        // Marca que essa atualização veio de fora (para não salvar de volta imediatamente)
+        isRemoteUpdate.current = true; 
+
+        if (data.transactions) setTransactions(data.transactions);
+        if (data.marketItems) setMarketItems(data.marketItems);
+        if (data.incomeCategories) setIncomeCategories(data.incomeCategories);
+        if (data.expenseCategories) setExpenseCategories(data.expenseCategories);
+        
+        setSyncStatus('synced');
+      } else {
+        setSyncStatus('synced'); // Documento novo/vazio
+      }
+    }, (error) => {
+      console.error("Erro na sincronização:", error);
+      setSyncStatus('error');
+    });
+
+    return () => unsubscribe(); // Limpa o ouvinte ao sair
+  }, [user]);
+
+  // 2. SALVAR na nuvem quando o usuário mexe (Auto-Save)
   useEffect(() => {
-    // Salva no LocalStorage sempre (backup offline)
+    // Sempre salva backup local
     localStorage.setItem('fs_transactions', JSON.stringify(transactions));
     localStorage.setItem('fs_market_items', JSON.stringify(marketItems));
     localStorage.setItem('fs_income_cats', JSON.stringify(incomeCategories));
     localStorage.setItem('fs_expense_cats', JSON.stringify(expenseCategories));
 
-    // Salva na Nuvem se estiver logado e o carregamento inicial já tiver terminado
-    if (user && !user.isGuest && !isCloudLoading) {
+    if (user && !user.isGuest) {
+      // Se a mudança veio da nuvem (isRemoteUpdate), ignoramos o salvamento
+      // para evitar loop. Apenas resetamos a flag.
+      if (isRemoteUpdate.current) {
+        isRemoteUpdate.current = false;
+        return;
+      }
+
+      setSyncStatus('syncing');
       const saveToCloud = async () => {
         try {
           await setDoc(doc(db, "users", user.id), {
@@ -113,19 +127,23 @@ const App: React.FC = () => {
             marketItems,
             incomeCategories,
             expenseCategories,
-            lastUpdated: new Date().toISOString()
+            lastUpdated: new Date().toISOString(),
+            userInfo: { name: user.name, email: user.email } // Útil para debug
           }, { merge: true });
-          // console.log("Dados sincronizados com a nuvem!");
+          setSyncStatus('synced');
         } catch (error) {
-          console.error("Erro ao salvar na nuvem:", error);
+          console.error("Erro ao salvar:", error);
+          setSyncStatus('error');
         }
       };
-      // Debounce simples poderia ser adicionado aqui, mas por enquanto salva direto
+
+      // Debounce simples: espera 1s sem digitar para salvar, ou salva direto?
+      // Para garantir integridade, salvamos direto por enquanto.
       saveToCloud();
     }
-  }, [transactions, marketItems, incomeCategories, expenseCategories, user, isCloudLoading]);
+  }, [transactions, marketItems, incomeCategories, expenseCategories, user]);
 
-  // --- Persistence Effects (User & Theme) ---
+  // --- Persistence Effects ---
 
   useEffect(() => {
     if (user) localStorage.setItem('fs_user', JSON.stringify(user));
@@ -196,7 +214,7 @@ const App: React.FC = () => {
   const handleLogout = () => {
     setUser(null);
     setIsSettingsOpen(false);
-    // Limpa estado local ao deslogar para evitar confusão, mas não localStorage (opcional)
+    // Limpa estado local para garantir segurança
     setTransactions([]);
     setMarketItems([]);
   };
@@ -348,16 +366,24 @@ const App: React.FC = () => {
         setCurrentDate={setCurrentDate}
       />
 
-      {/* Cloud Sync Status / Guest Banner */}
+      {/* Sync Status Bar */}
       {!user.isGuest && (
-        <div className="bg-blue-50 dark:bg-blue-900/20 border-b border-blue-100 dark:border-blue-800 px-4 py-1 flex justify-center">
-           {isCloudLoading ? (
+        <div className={`px-4 py-1 flex justify-center transition-colors ${
+          syncStatus === 'error' ? 'bg-red-100 dark:bg-red-900/30' : 'bg-blue-50 dark:bg-blue-900/20'
+        } border-b border-blue-100 dark:border-blue-800`}>
+           {syncStatus === 'syncing' && (
              <div className="flex items-center gap-2 text-xs text-blue-600 dark:text-blue-300">
-               <Loader2 className="w-3 h-3 animate-spin" /> Sincronizando com a nuvem...
+               <Loader2 className="w-3 h-3 animate-spin" /> Sincronizando...
              </div>
-           ) : (
+           )}
+           {syncStatus === 'synced' && (
              <div className="flex items-center gap-2 text-xs text-blue-600 dark:text-blue-300">
-               <Cloud className="w-3 h-3" /> Dados salvos na nuvem
+               <Cloud className="w-3 h-3" /> Tudo salvo na nuvem
+             </div>
+           )}
+           {syncStatus === 'error' && (
+             <div className="flex items-center gap-2 text-xs text-red-600 dark:text-red-300">
+               <WifiOff className="w-3 h-3" /> Erro ao salvar. Verifique sua conexão.
              </div>
            )}
         </div>
