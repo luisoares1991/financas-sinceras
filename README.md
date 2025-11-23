@@ -85,4 +85,4 @@ O diferencial? Ele usa **Inteligência Artificial (Google Gemini)** para ler not
 
 ---
 
-Desenvolvido com 💚 e sinceridade.
+Desenvolvido por Luis Ramos.
