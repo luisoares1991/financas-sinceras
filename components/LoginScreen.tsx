@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Loader2, Shield, User, CheckCircle2 } from 'lucide-react';
 import { User as UserType } from '../types';
+import { signInWithPopup } from 'firebase/auth'; // Importa a função de login
+import { auth, googleProvider } from '../services/firebase'; // Importa sua configuração
 
 interface LoginScreenProps {
   onLogin: (user: UserType) => void;
@@ -9,20 +11,29 @@ interface LoginScreenProps {
 const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleGoogleLogin = () => {
+  const handleGoogleLogin = async () => {
     setIsLoading(true);
-    // Simulating Google Auth delay
-    setTimeout(() => {
-      const mockUser: UserType = {
-        id: 'google-123',
-        name: 'Usuário Google',
-        email: 'usuario@gmail.com',
-        photoUrl: 'https://lh3.googleusercontent.com/a/default-user=s96-c',
+    try {
+      // Abre o popup do Google
+      const result = await signInWithPopup(auth, googleProvider);
+      const user = result.user;
+
+      // Cria o objeto de usuário compatível com seu App
+      const appUser: UserType = {
+        id: user.uid,
+        name: user.displayName || 'Usuário Google',
+        email: user.email || undefined,
+        photoUrl: user.photoURL || undefined,
         isGuest: false
       };
+
+      onLogin(appUser);
+    } catch (error) {
+      console.error("Erro no login:", error);
+      alert("Erro ao fazer login com Google. Verifique se o popup não foi bloqueado.");
+    } finally {
       setIsLoading(false);
-      onLogin(mockUser);
-    }, 1500);
+    }
   };
 
   const handleGuestLogin = () => {
@@ -104,13 +115,13 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
           <div className="mt-8 grid grid-cols-2 gap-4">
             <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-700/50">
               <Shield className="w-6 h-6 text-green-500 mb-2" />
-              <h3 className="text-white font-medium text-sm">Privacidade Total</h3>
-              <p className="text-xs text-gray-400 mt-1">Seus dados ficam salvos apenas no seu dispositivo.</p>
+              <h3 className="text-white font-medium text-sm">Dados Seguros</h3>
+              <p className="text-xs text-gray-400 mt-1">Sua autenticação é feita diretamente com o Google.</p>
             </div>
             <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-700/50">
               <CheckCircle2 className="w-6 h-6 text-blue-500 mb-2" />
-              <h3 className="text-white font-medium text-sm">Sem Cadastro</h3>
-              <p className="text-xs text-gray-400 mt-1">Comece a usar agora mesmo, sem formulários chatos.</p>
+              <h3 className="text-white font-medium text-sm">Sem Senhas</h3>
+              <p className="text-xs text-gray-400 mt-1">Acesso direto sem precisar criar mais uma senha.</p>
             </div>
           </div>
         </div>
