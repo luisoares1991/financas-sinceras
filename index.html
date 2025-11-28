@@ -2,31 +2,8 @@
 <html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    
-    <title>Finanças Sinceras | Seu Bolso Sem Enrolação</title>
-    <meta name="description" content="Gerenciador financeiro inteligente com leitura de recibos por IA e um consultor virtual que manda a real sobre seus gastos." />
-    <meta name="author" content="Luis Soares" />
-    <meta name="keywords" content="finanças, controle de gastos, IA, Gemini, React, PWA, gerenciador financeiro" />
-
-    <link rel="icon" type="image/svg+xml" href="/logo.svg" />
-    <meta name="theme-color" content="#22c55e" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="Finanças Sinceras" />
-
-    <meta property="og:type" content="website" />
-    <meta property="og:url" content="https://financas-sinceras.vercel.app/" />
-    <meta property="og:title" content="Finanças Sinceras 💸" />
-    <meta property="og:description" content="A IA que organiza seu dinheiro e julga seus gastos supérfluos. Experimente agora." />
-    <meta property="og:image" content="https://financas-sinceras.vercel.app/logo.svg" />
-
-    <meta property="twitter:card" content="summary_large_image" />
-    <meta property="twitter:url" content="https://financas-sinceras.vercel.app/" />
-    <meta property="twitter:title" content="Finanças Sinceras 💸" />
-    <meta property="twitter:description" content="Pare de mentir para o seu bolso. Use IA para rastrear cada centavo." />
-    <meta property="twitter:image" content="https://financas-sinceras.vercel.app/logo.svg" />
-
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Finanças Sinceras</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
@@ -59,9 +36,22 @@
         background: #4A5568;
       }
     </style>
-  </head>
+  <script type="importmap">
+{
+  "imports": {
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0",
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.554.0",
+    "recharts": "https://aistudiocdn.com/recharts@^3.4.1"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/index.tsx"></script>
-  </body>
+  <script type="module" src="/index.tsx"></script>
+</body>
 </html>

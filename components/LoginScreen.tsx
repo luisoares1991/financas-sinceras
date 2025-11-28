@@ -1,43 +1,33 @@
 import React, { useState } from 'react';
-import { Loader2, Shield, User, CheckCircle2 } from 'lucide-react';
-import { User as UserType } from '../types';
-import { signInWithPopup } from 'firebase/auth'; // Importa a função de login
-import { auth, googleProvider } from '../services/firebase'; // Importa sua configuração
+import { Loader2, Shield, User as UserIcon, CheckCircle2, AlertCircle } from 'lucide-react';
+import { signInWithPopup } from 'firebase/auth';
+import { auth, googleProvider } from '../services/firebase';
+import { User } from '../types';
 
 interface LoginScreenProps {
-  onLogin: (user: UserType) => void;
+  onLogin: (user: User) => void;
 }
 
 const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState('');
 
   const handleGoogleLogin = async () => {
     setIsLoading(true);
+    setError('');
     try {
-      // Abre o popup do Google
       const result = await signInWithPopup(auth, googleProvider);
-      const user = result.user;
-
-      // Cria o objeto de usuário compatível com seu App
-      const appUser: UserType = {
-        id: user.uid,
-        name: user.displayName || 'Usuário Google',
-        email: user.email || undefined,
-        photoUrl: user.photoURL || undefined,
-        isGuest: false
-      };
-
-      onLogin(appUser);
-    } catch (error) {
-      console.error("Erro no login:", error);
-      alert("Erro ao fazer login com Google. Verifique se o popup não foi bloqueado.");
-    } finally {
+      // O App.tsx vai detectar a mudança de estado via onAuthStateChanged,
+      // mas podemos chamar onLogin aqui se necessário. Geralmente não precisa.
+    } catch (err: any) {
+      console.error(err);
+      setError('Erro ao conectar com Google. Verifique se o domínio está autorizado no Firebase.');
       setIsLoading(false);
     }
   };
 
   const handleGuestLogin = () => {
-    const guestUser: UserType = {
+    const guestUser: User = {
       id: 'guest-' + Date.now(),
       name: 'Convidado',
       isGuest: true
@@ -60,6 +50,14 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
         {/* Login Card */}
         <div className="bg-gray-800/50 backdrop-blur-xl border border-gray-700 rounded-3xl p-8 shadow-2xl animate-in zoom-in-95 duration-500 delay-150">
           <div className="space-y-4">
+            
+            {error && (
+              <div className="bg-red-500/20 border border-red-500/50 p-3 rounded-xl flex items-start gap-2 text-red-200 text-xs">
+                 <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                 <span>{error}</span>
+              </div>
+            )}
+
             {/* Google Button */}
             <button
               onClick={handleGoogleLogin}
@@ -106,7 +104,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
               disabled={isLoading}
               className="w-full bg-gray-700/50 hover:bg-gray-700 border border-gray-600 text-gray-200 font-semibold py-4 px-6 rounded-xl flex items-center justify-center gap-3 transition-all hover:scale-[1.02] active:scale-[0.98]"
             >
-              <User className="w-6 h-6" />
+              <UserIcon className="w-6 h-6" />
               <span>Continuar como Convidado</span>
             </button>
           </div>
@@ -115,20 +113,16 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
           <div className="mt-8 grid grid-cols-2 gap-4">
             <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-700/50">
               <Shield className="w-6 h-6 text-green-500 mb-2" />
-              <h3 className="text-white font-medium text-sm">Dados Seguros</h3>
-              <p className="text-xs text-gray-400 mt-1">Sua autenticação é feita diretamente com o Google.</p>
+              <h3 className="text-white font-medium text-sm">Privacidade Total</h3>
+              <p className="text-xs text-gray-400 mt-1">Seus dados são seus. Segurança Google.</p>
             </div>
             <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-700/50">
               <CheckCircle2 className="w-6 h-6 text-blue-500 mb-2" />
-              <h3 className="text-white font-medium text-sm">Sem Senhas</h3>
-              <p className="text-xs text-gray-400 mt-1">Acesso direto sem precisar criar mais uma senha.</p>
+              <h3 className="text-white font-medium text-sm">Nuvem Sincronizada</h3>
+              <p className="text-xs text-gray-400 mt-1">Acesse do celular ou computador.</p>
             </div>
           </div>
         </div>
-        
-        <p className="text-center text-gray-600 text-xs mt-8">
-          Ao continuar, você concorda em organizar sua vida financeira (ou tentar).
-        </p>
       </div>
     </div>
   );

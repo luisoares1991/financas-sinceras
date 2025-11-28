@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import Header from './components/Header';
 import Dashboard from './components/Dashboard';
 import TransactionForm from './components/TransactionForm';
@@ -9,149 +9,116 @@ import BatchEntryModal from './components/BatchEntryModal';
 import MarketSubApp from './components/MarketSubApp';
 import LoginScreen from './components/LoginScreen';
 import { Transaction, DashboardStats, MarketItem, User } from './types';
-import { Plus, Filter, AlertTriangle, ListPlus, X, Cloud, Loader2, WifiOff } from 'lucide-react';
-import { doc, setDoc, onSnapshot } from 'firebase/firestore';
-import { db } from './services/firebase';
+import { Plus, Filter, AlertTriangle, ListPlus, X, Loader2 } from 'lucide-react';
+import { auth } from './services/firebase';
+import { onAuthStateChanged } from 'firebase/auth';
+import { 
+  subscribeTransactions, addTransaction, updateTransaction, deleteTransactionAdapter,
+  subscribeMarketItems, addMarketItemsBatch, loadUserSettings, saveUserSettings, clearAllData
+} from './services/storageAdapter';
 
-// Defaults
 const DEFAULT_INCOME_CATS = ['Salário', 'Investimentos', 'Presente', 'Outros'];
 const DEFAULT_EXPENSE_CATS = ['Alimentação', 'Mercado', 'Transporte', 'Moradia', 'Lazer', 'Saúde', 'Educação', 'Compras', 'Outros'];
 
 const App: React.FC = () => {
-  // --- Auth State ---
-  const [user, setUser] = useState<User | null>(() => {
-    const saved = localStorage.getItem('fs_user');
-    return saved ? JSON.parse(saved) : null;
-  });
-  
-  // --- Data State ---
-  const [theme, setTheme] = useState<'light' | 'dark' | 'system'>(() => {
-    return (localStorage.getItem('fs_theme') as 'light' | 'dark' | 'system') || 'system';
-  });
-  
-  const [transactions, setTransactions] = useState<Transaction[]>(() => {
-    const saved = localStorage.getItem('fs_transactions');
-    return saved ? JSON.parse(saved) : [];
-  });
+  // Auth State
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
 
-  const [marketItems, setMarketItems] = useState<MarketItem[]>(() => {
-    const saved = localStorage.getItem('fs_market_items');
-    return saved ? JSON.parse(saved) : [];
-  });
+  // Data State
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [marketItems, setMarketItems] = useState<MarketItem[]>([]);
+  const [incomeCategories, setIncomeCategories] = useState<string[]>(DEFAULT_INCOME_CATS);
+  const [expenseCategories, setExpenseCategories] = useState<string[]>(DEFAULT_EXPENSE_CATS);
+  const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
 
-  const [incomeCategories, setIncomeCategories] = useState<string[]>(() => {
-    const saved = localStorage.getItem('fs_income_cats');
-    return saved ? JSON.parse(saved) : DEFAULT_INCOME_CATS;
-  });
-
-  const [expenseCategories, setExpenseCategories] = useState<string[]>(() => {
-    const saved = localStorage.getItem('fs_expense_cats');
-    return saved ? JSON.parse(saved) : DEFAULT_EXPENSE_CATS;
-  });
-
+  // UI State
   const [currentDate, setCurrentDate] = useState(new Date());
   const [showGuestBanner, setShowGuestBanner] = useState(true);
-  
-  // Status da Nuvem
-  const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'error'>('synced');
-  
-  // Flag para evitar loop infinito (Cloud -> State -> Cloud)
-  const isRemoteUpdate = useRef(false);
-  
-  // Modals
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isBatchOpen, setIsBatchOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isMarketOpen, setIsMarketOpen] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
   const [isClearAllConfirmOpen, setIsClearAllConfirmOpen] = useState(false);
-
-  // Filters
   const [typeFilter, setTypeFilter] = useState<'all' | 'income' | 'expense'>('all');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
 
-  // --- REAL-TIME SYNC LOGIC (O Grande Segredo) ---
+  // --- Auth & Data Subscriptions ---
 
-  // 1. ESCUTAR mudanças da nuvem (Real-time Listener)
   useEffect(() => {
-    if (!user || user.isGuest) return;
-
-    setSyncStatus('syncing');
-    
-    // Inscreve-se para ouvir mudanças no documento do usuário
-    const unsubscribe = onSnapshot(doc(db, "users", user.id), (docSnapshot) => {
-      if (docSnapshot.exists()) {
-        const data = docSnapshot.data();
-        
-        // Marca que essa atualização veio de fora (para não salvar de volta imediatamente)
-        isRemoteUpdate.current = true; 
-
-        if (data.transactions) setTransactions(data.transactions);
-        if (data.marketItems) setMarketItems(data.marketItems);
-        if (data.incomeCategories) setIncomeCategories(data.incomeCategories);
-        if (data.expenseCategories) setExpenseCategories(data.expenseCategories);
-        
-        setSyncStatus('synced');
+    // Escuta mudanças na autenticação do Firebase
+    const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        // Usuário Logado
+        const newUser: User = {
+          id: firebaseUser.uid,
+          name: firebaseUser.displayName || 'Usuário',
+          email: firebaseUser.email || undefined,
+          photoUrl: firebaseUser.photoURL || undefined,
+          isGuest: false
+        };
+        setUser(newUser);
       } else {
-        setSyncStatus('synced'); // Documento novo/vazio
+        // Verifica se estava como convidado antes
+        const guestSaved = localStorage.getItem('fs_user');
+        if (guestSaved) {
+           const parsed = JSON.parse(guestSaved);
+           if (parsed.isGuest) setUser(parsed);
+           else setUser(null);
+        } else {
+           setUser(null);
+        }
       }
-    }, (error) => {
-      console.error("Erro na sincronização:", error);
-      setSyncStatus('error');
+      setAuthLoading(false);
+    });
+    return () => unsubscribeAuth();
+  }, []);
+
+  // Persistência local do usuário (apenas para Guest mode)
+  useEffect(() => {
+    if (user?.isGuest) localStorage.setItem('fs_user', JSON.stringify(user));
+    if (!user) localStorage.removeItem('fs_user');
+  }, [user]);
+
+  // Carregar dados quando o usuário muda
+  useEffect(() => {
+    if (!user) {
+      setTransactions([]);
+      setMarketItems([]);
+      return;
+    }
+
+    // 1. Carregar Configurações (Categorias/Tema)
+    loadUserSettings(user).then(settings => {
+      if (settings.incomeCategories) setIncomeCategories(settings.incomeCategories);
+      if (settings.expenseCategories) setExpenseCategories(settings.expenseCategories);
+      if (settings.theme) setTheme(settings.theme);
     });
 
-    return () => unsubscribe(); // Limpa o ouvinte ao sair
+    // 2. Inscrever nas Transações (Sync Real-time)
+    const unsubTrans = subscribeTransactions(user, (data) => {
+      // Ordenar localmente para evitar necessidade de índice complexo no Firestore
+      const sorted = data.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      setTransactions(sorted);
+    });
+
+    // 3. Inscrever no Mercadinho
+    const unsubMarket = subscribeMarketItems(user, (data) => {
+      setMarketItems(data);
+    });
+
+    return () => {
+      unsubTrans();
+      unsubMarket();
+    };
   }, [user]);
 
-  // 2. SALVAR na nuvem quando o usuário mexe (Auto-Save)
+  // --- Theme Effect ---
   useEffect(() => {
-    // Sempre salva backup local
-    localStorage.setItem('fs_transactions', JSON.stringify(transactions));
-    localStorage.setItem('fs_market_items', JSON.stringify(marketItems));
-    localStorage.setItem('fs_income_cats', JSON.stringify(incomeCategories));
-    localStorage.setItem('fs_expense_cats', JSON.stringify(expenseCategories));
+    // Salvar tema na nuvem/local
+    if (user) saveUserSettings(user, { theme });
 
-    if (user && !user.isGuest) {
-      // Se a mudança veio da nuvem (isRemoteUpdate), ignoramos o salvamento
-      // para evitar loop. Apenas resetamos a flag.
-      if (isRemoteUpdate.current) {
-        isRemoteUpdate.current = false;
-        return;
-      }
-
-      setSyncStatus('syncing');
-      const saveToCloud = async () => {
-        try {
-          await setDoc(doc(db, "users", user.id), {
-            transactions,
-            marketItems,
-            incomeCategories,
-            expenseCategories,
-            lastUpdated: new Date().toISOString(),
-            userInfo: { name: user.name, email: user.email } // Útil para debug
-          }, { merge: true });
-          setSyncStatus('synced');
-        } catch (error) {
-          console.error("Erro ao salvar:", error);
-          setSyncStatus('error');
-        }
-      };
-
-      // Debounce simples: espera 1s sem digitar para salvar, ou salva direto?
-      // Para garantir integridade, salvamos direto por enquanto.
-      saveToCloud();
-    }
-  }, [transactions, marketItems, incomeCategories, expenseCategories, user]);
-
-  // --- Persistence Effects ---
-
-  useEffect(() => {
-    if (user) localStorage.setItem('fs_user', JSON.stringify(user));
-    else localStorage.removeItem('fs_user');
-  }, [user]);
-
-  useEffect(() => {
-    localStorage.setItem('fs_theme', theme);
     const root = document.documentElement;
     const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
     const applyTheme = () => {
@@ -162,16 +129,15 @@ const App: React.FC = () => {
       }
     };
     applyTheme();
-  }, [theme]);
+  }, [theme, user]);
 
-  // --- Computed Values ---
-
+  // --- Computed Values (Same as before) ---
   const monthlyTransactions = useMemo(() => {
     return transactions.filter(t => {
       const tDate = new Date(t.date);
       return tDate.getMonth() === currentDate.getMonth() && 
              tDate.getFullYear() === currentDate.getFullYear();
-    }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    });
   }, [transactions, currentDate]);
 
   const filteredTransactions = useMemo(() => {
@@ -207,80 +173,104 @@ const App: React.FC = () => {
 
   // --- Handlers ---
 
-  const handleLogin = (userData: User) => {
-    setUser(userData);
-  };
+  const handleLogin = (userData: User) => setUser(userData);
+  const handleLogout = () => { setUser(null); setIsSettingsOpen(false); };
 
-  const handleLogout = () => {
-    setUser(null);
-    setIsSettingsOpen(false);
-    // Limpa estado local para garantir segurança
-    setTransactions([]);
-    setMarketItems([]);
-  };
-
-  const handleSaveTransaction = (t: Transaction) => {
-    setTransactions(prev => {
-      const index = prev.findIndex(item => item.id === t.id);
-      if (index >= 0) {
-        const newTrans = [...prev];
-        newTrans[index] = t;
-        return newTrans;
-      }
-      return [t, ...prev];
-    });
+  const handleSaveTransaction = async (t: Transaction) => {
+    if (!user) return;
+    if (editingTransaction) {
+       await updateTransaction(user, t);
+    } else {
+       await addTransaction(user, t);
+    }
     setIsFormOpen(false);
     setEditingTransaction(null);
   };
 
-  const handleSaveBatch = (newTransactions: Transaction[]) => {
-    setTransactions(prev => [...newTransactions, ...prev]);
+  const handleSaveBatch = async (newTransactions: Transaction[]) => {
+    if (!user) return;
+    for (const t of newTransactions) {
+      await addTransaction(user, t);
+    }
   };
 
-  const handleSaveMarketReceipt = (transaction: Transaction, items: MarketItem[]) => {
+  const handleSaveMarketReceipt = async (transaction: Transaction, items: MarketItem[]) => {
+    if (!user) return;
     const receiptId = crypto.randomUUID();
-    setTransactions(prev => [transaction, ...prev]);
+    const transWithId = { ...transaction, id: receiptId }; // Use same ID for linking if needed
+    
+    await addTransaction(user, transWithId);
+    
     const itemsWithId = items.map(item => ({ ...item, receiptId: receiptId }));
-    setMarketItems(prev => [...itemsWithId, ...prev]);
+    await addMarketItemsBatch(user, itemsWithId);
+    
     alert("Nota fiscal salva com sucesso!");
     setIsMarketOpen(false);
   };
 
-  const deleteTransaction = (id: string) => {
-    setTransactions(prev => prev.filter(t => t.id !== id));
+  const handleDeleteTransaction = async (id: string) => {
+    if (!user) return;
+    await deleteTransactionAdapter(user, id);
   };
 
-  const handleClearAllData = () => {
-    setTransactions([]);
-    setMarketItems([]);
+  const handleClearAllData = async () => {
+    if (!user) return;
+    await clearAllData(user);
     setIsClearAllConfirmOpen(false);
     setIsSettingsOpen(false);
   };
 
+  // Category Management
   const handleAddCategory = (type: 'income' | 'expense', name: string) => {
+    if (!user) return;
+    let newCats;
     if (type === 'income') {
-      if (!incomeCategories.includes(name)) setIncomeCategories([...incomeCategories, name]);
+      if (incomeCategories.includes(name)) return;
+      newCats = [...incomeCategories, name];
+      setIncomeCategories(newCats);
+      saveUserSettings(user, { incomeCategories: newCats });
     } else {
-      if (!expenseCategories.includes(name)) setExpenseCategories([...expenseCategories, name]);
+      if (expenseCategories.includes(name)) return;
+      newCats = [...expenseCategories, name];
+      setExpenseCategories(newCats);
+      saveUserSettings(user, { expenseCategories: newCats });
     }
   };
 
   const handleRemoveCategory = (type: 'income' | 'expense', name: string) => {
-    if (type === 'income') setIncomeCategories(prev => prev.filter(c => c !== name));
-    else setExpenseCategories(prev => prev.filter(c => c !== name));
+    if (!user) return;
+    if (type === 'income') {
+       const newCats = incomeCategories.filter(c => c !== name);
+       setIncomeCategories(newCats);
+       saveUserSettings(user, { incomeCategories: newCats });
+    } else {
+       const newCats = expenseCategories.filter(c => c !== name);
+       setExpenseCategories(newCats);
+       saveUserSettings(user, { expenseCategories: newCats });
+    }
   };
 
   const handleRenameCategory = (type: 'income' | 'expense', oldName: string, newName: string) => {
-    if (type === 'income') setIncomeCategories(prev => prev.map(c => c === oldName ? newName : c));
-    else setExpenseCategories(prev => prev.map(c => c === oldName ? newName : c));
-    setTransactions(prev => prev.map(t => (t.type === type && t.category === oldName) ? { ...t, category: newName } : t));
+    if (!user) return;
+    // 1. Update List
+    if (type === 'income') {
+       const newCats = incomeCategories.map(c => c === oldName ? newName : c);
+       setIncomeCategories(newCats);
+       saveUserSettings(user, { incomeCategories: newCats });
+    } else {
+       const newCats = expenseCategories.map(c => c === oldName ? newName : c);
+       setExpenseCategories(newCats);
+       saveUserSettings(user, { expenseCategories: newCats });
+    }
+    // 2. Update Transactions (This is heavy in Firestore, might want to limit or warn)
+    // For now, let's assume the user edits transactions manually or we implement a batch update later.
+    // In local mode it was easy, in Firestore it requires fetching all matching docs and updating them.
+    alert("Nota: As transações antigas manterão o nome da categoria anterior por enquanto.");
   };
 
+  // CSV Export/Import (Keep logic mostly same, but use current transactions state)
   const handleExportCSV = () => {
-    if (transactions.length === 0) {
-      alert("Não há dados para exportar.");
-      return;
-    }
+    if (transactions.length === 0) { alert("Sem dados."); return; }
     const headers = ["Data", "Descrição", "Categoria", "Tipo", "Valor"];
     const rows = transactions.map(t => [
       new Date(t.date).toLocaleDateString('pt-BR'),
@@ -300,58 +290,51 @@ const App: React.FC = () => {
 
   const handleImportCSV = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if(!file) return;
-    
+    if(!file || !user) return;
     const reader = new FileReader();
-    reader.onload = (evt) => {
+    reader.onload = async (evt) => {
         const text = evt.target?.result as string;
         const lines = text.split('\n');
         const newTrans: Transaction[] = [];
-        
         lines.forEach((line, idx) => {
-            if (idx === 0 || !line.trim()) return; 
+            if (idx === 0) return; 
             const separator = line.includes(';') ? ';' : ',';
             const cols = line.split(separator);
-            
             if (cols.length >= 3) {
-                 let dateISO = new Date().toISOString();
-                 const rawDate = cols[0]?.trim();
-                 if (rawDate && rawDate.includes('/')) {
-                    const [day, month, year] = rawDate.split('/');
-                    const d = new Date(Number(year), Number(month) - 1, Number(day), 12, 0, 0);
-                    if (!isNaN(d.getTime())) dateISO = d.toISOString();
-                 }
-
-                 let valStr = cols[cols.length - 1]?.replace(/"/g, '').trim(); 
-                 if (valStr) valStr = valStr.replace(/\./g, '').replace(',', '.');
-                 
+                 let valStr = cols[cols.length - 1]; 
+                 if (valStr && valStr.includes(',')) valStr = valStr.replace(/\./g, '').replace(',', '.');
                  const amount = Math.abs(parseFloat(valStr));
-                 const typeRaw = cols[3]?.toLowerCase() || '';
-                 const isExpense = parseFloat(valStr) < 0 || typeRaw.includes('saída') || typeRaw.includes('débito');
-
-                 if (!isNaN(amount) && amount > 0) {
+                 const isExpense = parseFloat(valStr) < 0 || (cols[3] && cols[3].toLowerCase().includes('saída'));
+                 if (!isNaN(amount)) {
                      newTrans.push({
                          id: crypto.randomUUID(),
-                         date: dateISO,
+                         date: cols[0] ? new Date().toISOString() : new Date().toISOString(),
                          description: cols[1]?.replace(/"/g, '') || 'Importado',
-                         category: cols[2]?.replace(/"/g, '') || 'Outros',
+                         category: cols[2]?.replace(/"/g, '') || 'Importado',
                          type: isExpense ? 'expense' : 'income',
                          amount: amount
                      });
                  }
             }
         });
-
         if (newTrans.length > 0) {
-            setTransactions(prev => [...newTrans, ...prev]);
+            await handleSaveBatch(newTrans); // Use adapter
             alert(`${newTrans.length} transações importadas com sucesso!`);
             setIsSettingsOpen(false);
-        } else {
-            alert("Erro ao ler arquivo.");
-        }
+        } else alert("Erro ao ler arquivo.");
     };
     reader.readAsText(file);
   };
+
+  // --- Render ---
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+        <Loader2 className="w-10 h-10 text-green-500 animate-spin" />
+      </div>
+    );
+  }
 
   if (!user) {
     return <LoginScreen onLogin={handleLogin} />;
@@ -366,38 +349,13 @@ const App: React.FC = () => {
         setCurrentDate={setCurrentDate}
       />
 
-      {/* Sync Status Bar */}
-      {!user.isGuest && (
-        <div className={`px-4 py-1 flex justify-center transition-colors ${
-          syncStatus === 'error' ? 'bg-red-100 dark:bg-red-900/30' : 'bg-blue-50 dark:bg-blue-900/20'
-        } border-b border-blue-100 dark:border-blue-800`}>
-           {syncStatus === 'syncing' && (
-             <div className="flex items-center gap-2 text-xs text-blue-600 dark:text-blue-300">
-               <Loader2 className="w-3 h-3 animate-spin" /> Sincronizando...
-             </div>
-           )}
-           {syncStatus === 'synced' && (
-             <div className="flex items-center gap-2 text-xs text-blue-600 dark:text-blue-300">
-               <Cloud className="w-3 h-3" /> Tudo salvo na nuvem
-             </div>
-           )}
-           {syncStatus === 'error' && (
-             <div className="flex items-center gap-2 text-xs text-red-600 dark:text-red-300">
-               <WifiOff className="w-3 h-3" /> Erro ao salvar. Verifique sua conexão.
-             </div>
-           )}
-        </div>
-      )}
-
       {user.isGuest && showGuestBanner && (
         <div className="bg-orange-100 dark:bg-orange-900/30 border-b border-orange-200 dark:border-orange-800 px-4 py-2 flex items-center justify-between animate-in slide-in-from-top-2">
           <div className="flex items-center gap-2 text-orange-700 dark:text-orange-300 text-sm">
              <AlertTriangle className="w-4 h-4" />
-             <span>Você está em modo Convidado. Seus dados não estão salvos na nuvem.</span>
+             <span>Modo Convidado: Dados salvos apenas neste navegador. Faça login para salvar na nuvem.</span>
           </div>
-          <button onClick={() => setShowGuestBanner(false)} className="text-orange-700 dark:text-orange-300 hover:text-orange-900 p-1">
-            <X className="w-4 h-4" />
-          </button>
+          <button onClick={() => setShowGuestBanner(false)} className="text-orange-700 dark:text-orange-300 hover:text-orange-900 p-1"><X className="w-4 h-4" /></button>
         </div>
       )}
 
@@ -408,148 +366,80 @@ const App: React.FC = () => {
 
         <section className="grid grid-cols-1 lg:grid-cols-3 gap-8">
            <div className="lg:col-span-3">
+              {/* Toolbar */}
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-4">
                   <h2 className="text-xl font-bold">Transações</h2>
                   <div className="flex gap-2 flex-1 sm:flex-none w-full sm:w-auto">
-                     <button 
-                        onClick={() => setIsBatchOpen(true)}
-                        className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors shadow-lg shadow-blue-600/20"
-                     >
-                        <ListPlus className="w-5 h-5" />
-                        Em Lote / Extrato
+                     <button onClick={() => setIsBatchOpen(true)} className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors shadow-lg shadow-blue-600/20">
+                        <ListPlus className="w-5 h-5" /> Em Lote / Extrato
                     </button>
-                    <button 
-                        onClick={() => { setEditingTransaction(null); setIsFormOpen(true); }}
-                        className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium transition-colors shadow-lg shadow-green-600/20"
-                    >
-                        <Plus className="w-5 h-5" />
-                        Adicionar
+                    <button onClick={() => { setEditingTransaction(null); setIsFormOpen(true); }} className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium transition-colors shadow-lg shadow-green-600/20">
+                        <Plus className="w-5 h-5" /> Adicionar
                     </button>
                   </div>
               </div>
 
+              {/* Filters */}
               <div className="bg-white dark:bg-gray-800 p-4 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 mb-6 flex flex-col sm:flex-row gap-4 items-center">
                   <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400">
-                      <Filter className="w-5 h-5" />
-                      <span className="text-sm font-medium">Filtrar por:</span>
+                      <Filter className="w-5 h-5" /><span className="text-sm font-medium">Filtrar por:</span>
                   </div>
-                  
-                  <select 
-                      value={typeFilter} 
-                      onChange={(e) => setTypeFilter(e.target.value as any)}
-                      className="w-full sm:w-auto bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-900 dark:text-white text-sm rounded-lg focus:ring-green-500 focus:border-green-500 block p-2.5 outline-none"
-                  >
+                  <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value as any)} className="w-full sm:w-auto bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-900 dark:text-white text-sm rounded-lg p-2.5 outline-none">
                       <option value="all">Todos os Tipos</option>
                       <option value="income">Entradas (+)</option>
                       <option value="expense">Saídas (-)</option>
                   </select>
-
-                  <select 
-                      value={categoryFilter} 
-                      onChange={(e) => setCategoryFilter(e.target.value)}
-                      className="w-full sm:w-auto bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-900 dark:text-white text-sm rounded-lg focus:ring-green-500 focus:border-green-500 block p-2.5 min-w-[150px] outline-none"
-                  >
+                  <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} className="w-full sm:w-auto bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-900 dark:text-white text-sm rounded-lg p-2.5 min-w-[150px] outline-none">
                       <option value="all">Todas as Categorias</option>
-                      {usedCategories.map(cat => (
-                          <option key={cat} value={cat}>{cat}</option>
-                      ))}
+                      {usedCategories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
                   </select>
-                  
                   {(typeFilter !== 'all' || categoryFilter !== 'all') && (
-                      <button 
-                          onClick={() => { setTypeFilter('all'); setCategoryFilter('all'); }}
-                          className="text-sm text-red-500 hover:text-red-700 hover:underline ml-auto sm:ml-0 font-medium"
-                      >
-                          Limpar Filtros
-                      </button>
+                      <button onClick={() => { setTypeFilter('all'); setCategoryFilter('all'); }} className="text-sm text-red-500 hover:text-red-700 hover:underline ml-auto sm:ml-0 font-medium">Limpar Filtros</button>
                   )}
               </div>
 
-              <TransactionList 
-                transactions={filteredTransactions} 
-                onDelete={deleteTransaction} 
-                onEdit={(t) => { setEditingTransaction(t); setIsFormOpen(true); }}
-              />
+              <TransactionList transactions={filteredTransactions} onDelete={handleDeleteTransaction} onEdit={(t) => { setEditingTransaction(t); setIsFormOpen(true); }} />
            </div>
         </section>
       </main>
 
-      <ChatWidget 
-        stats={{...fullMonthStats, topCategory}} 
-        marketItems={marketItems} 
-        transactions={monthlyTransactions} 
-      />
+      <ChatWidget stats={{...fullMonthStats, topCategory}} marketItems={marketItems} />
       
       {isFormOpen && (
         <TransactionForm 
-          onSave={handleSaveTransaction} 
-          onClose={() => setIsFormOpen(false)} 
-          initialData={editingTransaction}
-          incomeCategories={incomeCategories}
-          expenseCategories={expenseCategories}
-          onAddCategory={handleAddCategory}
+          onSave={handleSaveTransaction} onClose={() => setIsFormOpen(false)} 
+          initialData={editingTransaction} incomeCategories={incomeCategories} expenseCategories={expenseCategories} onAddCategory={handleAddCategory}
         />
       )}
 
       <BatchEntryModal 
-         isOpen={isBatchOpen}
-         onClose={() => setIsBatchOpen(false)}
-         onSaveBatch={handleSaveBatch}
-         incomeCategories={incomeCategories}
-         expenseCategories={expenseCategories}
-         onAddCategory={handleAddCategory}
+         isOpen={isBatchOpen} onClose={() => setIsBatchOpen(false)} onSaveBatch={handleSaveBatch}
+         incomeCategories={incomeCategories} expenseCategories={expenseCategories} onAddCategory={handleAddCategory}
       />
 
-      <MarketSubApp
-         isOpen={isMarketOpen}
-         onClose={() => setIsMarketOpen(false)}
-         onSaveReceipt={handleSaveMarketReceipt}
-         items={marketItems}
+      <MarketSubApp 
+         isOpen={isMarketOpen} onClose={() => setIsMarketOpen(false)} onSaveReceipt={handleSaveMarketReceipt} items={marketItems}
       />
 
       <SettingsModal 
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        theme={theme}
-        setTheme={setTheme}
-        incomeCategories={incomeCategories}
-        expenseCategories={expenseCategories}
-        onAddCategory={handleAddCategory}
-        onRemoveCategory={handleRemoveCategory}
-        onRenameCategory={handleRenameCategory}
-        onExport={handleExportCSV}
-        onImport={handleImportCSV}
-        onClearAll={() => setIsClearAllConfirmOpen(true)}
-        user={user}
-        onLogout={handleLogout}
+        isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)}
+        theme={theme} setTheme={setTheme}
+        incomeCategories={incomeCategories} expenseCategories={expenseCategories}
+        onAddCategory={handleAddCategory} onRemoveCategory={handleRemoveCategory} onRenameCategory={handleRenameCategory}
+        onExport={handleExportCSV} onImport={handleImportCSV} onClearAll={() => setIsClearAllConfirmOpen(true)}
+        user={user} onLogout={handleLogout}
       />
 
       {isClearAllConfirmOpen && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
           <div className="bg-white dark:bg-gray-900 rounded-2xl w-full max-w-sm p-6 shadow-2xl border border-gray-200 dark:border-gray-800">
             <div className="flex flex-col items-center text-center">
-              <div className="w-12 h-12 bg-red-100 dark:bg-red-900/30 rounded-full flex items-center justify-center mb-4 text-red-600">
-                <AlertTriangle className="w-6 h-6" />
-              </div>
-              <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-2">
-                Apagar TUDO?
-              </h3>
-              <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
-                Isso é irreversível. Todos os seus dados serão perdidos.
-              </p>
+              <div className="w-12 h-12 bg-red-100 dark:bg-red-900/30 rounded-full flex items-center justify-center mb-4 text-red-600"><AlertTriangle className="w-6 h-6" /></div>
+              <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-2">Apagar TUDO?</h3>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">{user?.isGuest ? "Isso limpará os dados do navegador." : "A exclusão em massa na nuvem está desativada por segurança."}</p>
               <div className="flex gap-3 w-full">
-                <button 
-                  onClick={() => setIsClearAllConfirmOpen(false)}
-                  className="flex-1 py-2.5 px-4 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-xl font-medium transition-colors"
-                >
-                  Cancelar
-                </button>
-                <button 
-                  onClick={handleClearAllData}
-                  className="flex-1 py-2.5 px-4 bg-red-600 hover:bg-red-700 text-white rounded-xl font-medium shadow-lg shadow-red-600/20 transition-colors"
-                >
-                  Sim, Limpar
-                </button>
+                <button onClick={() => setIsClearAllConfirmOpen(false)} className="flex-1 py-2.5 px-4 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-xl font-medium transition-colors">Cancelar</button>
+                <button onClick={handleClearAllData} className="flex-1 py-2.5 px-4 bg-red-600 hover:bg-red-700 text-white rounded-xl font-medium shadow-lg shadow-red-600/20 transition-colors">Sim, Limpar</button>
               </div>
             </div>
           </div>

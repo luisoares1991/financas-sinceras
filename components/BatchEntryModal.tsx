@@ -56,111 +56,11 @@ const BatchEntryModal: React.FC<BatchEntryModalProps> = ({
     }));
   };
 
-  // Função dedicada para processar CSV
-  const parseCSV = (text: string) => {
-      const lines = text.split('\n');
-      const newRows: BatchRow[] = [];
-
-      lines.forEach((line, idx) => {
-          // Ignora cabeçalho ou linhas vazias
-          if (idx === 0 || !line.trim()) return;
-
-          const separator = line.includes(';') ? ';' : ',';
-          const cols = line.split(separator);
-
-          // Espera pelo menos: Data, Descrição, Categoria, Tipo, Valor (5 colunas)
-          // Ou adapta se tiver menos
-          if (cols.length >= 3) {
-               // 1. Tratamento de Data (DD/MM/AAAA -> YYYY-MM-DD para o input date do HTML)
-               let dateInputFormat = new Date().toISOString().split('T')[0];
-               const rawDate = cols[0]?.trim();
-
-               if (rawDate && rawDate.includes('/')) {
-                  const [day, month, year] = rawDate.split('/');
-                  // Garante formato YYYY-MM-DD
-                  if(year && month && day) {
-                      dateInputFormat = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
-                  }
-               }
-
-               // 2. Tratamento de Valor (Brasil: 3.200,00 -> Code: 3200.00)
-               let valStr = cols[cols.length - 1]?.replace(/"/g, '').trim();
-               if (valStr) {
-                  valStr = valStr.replace(/\./g, '').replace(',', '.');
-               }
-               const amount = Math.abs(parseFloat(valStr));
-
-               // 3. Tipo (Tenta adivinhar pelo texto ou sinal negativo)
-               const typeRaw = cols[3]?.toLowerCase() || '';
-               const isExpense = parseFloat(valStr) < 0 || typeRaw.includes('saída') || typeRaw.includes('débito') || typeRaw.includes('pagamento');
-               const type = isExpense ? 'expense' : 'income';
-
-               // 4. Categoria (Tenta achar ou usa 'Outros')
-               let category = cols[2]?.replace(/"/g, '').trim() || 'Outros';
-               
-               // Verifica se a categoria existe nas listas atuais
-               const catList = isExpense ? expenseCategories : incomeCategories;
-               
-               // Normalização simples para comparação
-               const match = catList.find(c => c.toLowerCase() === category.toLowerCase());
-               
-               if (match) {
-                   category = match;
-               } else if (category !== 'Outros' && category.length > 2) {
-                   // Se não existe e não é vazia, adiciona nova (opcional, ou joga pra Outros)
-                   // Aqui vamos adicionar para facilitar
-                   onAddCategory(type, category);
-               } else {
-                   category = 'Outros';
-               }
-
-               if (!isNaN(amount)) {
-                   newRows.push({
-                       tempId: crypto.randomUUID(),
-                       date: dateInputFormat,
-                       description: cols[1]?.replace(/"/g, '') || 'Importado',
-                       category: category,
-                       type: type,
-                       amount: amount
-                   });
-               }
-          }
-      });
-      return newRows;
-  };
-
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setIsLoading(true);
-
-    // Lógica para CSV (Processamento Local)
-    if (file.type === 'text/csv' || file.name.endsWith('.csv')) {
-        const reader = new FileReader();
-        reader.onload = (evt) => {
-            const text = evt.target?.result as string;
-            try {
-                const parsedRows = parseCSV(text);
-                if (parsedRows.length > 0) {
-                    // Adiciona as novas linhas ao topo ou fim
-                    setRows(prev => [...prev, ...parsedRows]);
-                } else {
-                    alert("Nenhuma transação válida encontrada no CSV.");
-                }
-            } catch (error) {
-                console.error(error);
-                alert("Erro ao processar o arquivo CSV.");
-            } finally {
-                setIsLoading(false);
-                if (fileInputRef.current) fileInputRef.current.value = '';
-            }
-        };
-        reader.readAsText(file);
-        return;
-    }
-
-    // Lógica para Imagem/PDF (Processamento via IA Gemini)
     const reader = new FileReader();
     reader.onloadend = async () => {
       const base64 = reader.result as string;
@@ -170,7 +70,7 @@ const BatchEntryModal: React.FC<BatchEntryModalProps> = ({
       try {
         const detectedTransactions = await analyzeFinancialStatement(base64Data, mimeType, incomeCategories, expenseCategories);
         
-        // Garante que categorias detectadas pela IA existam
+        // Process detections to ensure categories exist
         detectedTransactions.forEach(t => {
             if (t.category && t.type) {
                 const exists = t.type === 'income' 
@@ -193,6 +93,7 @@ const BatchEntryModal: React.FC<BatchEntryModalProps> = ({
           category: t.category || 'Outros'
         }));
 
+        // Append to existing or replace? Let's append to allow mixing manual + AI
         setRows(prev => [...prev, ...newRows]);
       } catch (error) {
         console.error(error);
@@ -206,7 +107,7 @@ const BatchEntryModal: React.FC<BatchEntryModalProps> = ({
   };
 
   const handleSave = () => {
-    // Filtra linhas vazias
+    // Filter valid rows
     const validTransactions: Transaction[] = rows
       .filter(r => r.description && r.amount > 0)
       .map(r => ({
@@ -215,8 +116,7 @@ const BatchEntryModal: React.FC<BatchEntryModalProps> = ({
         amount: Number(r.amount),
         type: r.type as 'income' | 'expense',
         category: r.category || 'Outros',
-        // Converte a data do input (YYYY-MM-DD) para ISO completo
-        date: new Date(r.date!).toISOString() 
+        date: r.date || new Date().toISOString()
       }));
 
     if (validTransactions.length === 0) {
@@ -225,8 +125,7 @@ const BatchEntryModal: React.FC<BatchEntryModalProps> = ({
     }
 
     onSaveBatch(validTransactions);
-    // Reseta o form
-    setRows([{ tempId: 'new', date: new Date().toISOString().split('T')[0], type: 'expense', description: '', amount: 0, category: expenseCategories[0] }]); 
+    setRows([{ tempId: 'new', date: new Date().toISOString().split('T')[0], type: 'expense', description: '', amount: 0, category: expenseCategories[0] }]); // Reset
     onClose();
   };
 
@@ -241,24 +140,24 @@ const BatchEntryModal: React.FC<BatchEntryModalProps> = ({
               <FileText className="w-6 h-6 text-blue-600" />
               Adição em Lote / Extrato
             </h2>
-            <p className="text-xs text-gray-500">Envie uma fatura (PDF/Img) ou Planilha (CSV).</p>
+            <p className="text-xs text-gray-500">Envie uma fatura ou digite múltiplos itens.</p>
           </div>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">
             <X className="w-6 h-6" />
           </button>
         </div>
 
-        {/* Upload Section */}
+        {/* AI Upload Section */}
         <div className="p-4 bg-blue-50 dark:bg-blue-900/10 border-b border-blue-100 dark:border-blue-900/30 shrink-0">
            {isLoading ? (
              <div className="flex flex-col items-center justify-center py-6 text-blue-600 gap-3">
                 <div className="flex items-center gap-3">
                     <Loader2 className="w-8 h-8 animate-spin" />
-                    <span className="font-bold text-lg">Processando arquivo...</span>
+                    <span className="font-bold text-lg">A IA está lendo sua fatura...</span>
                 </div>
                 <div className="flex items-center gap-2 text-sm text-blue-500 dark:text-blue-400 bg-blue-100 dark:bg-blue-900/30 px-4 py-2 rounded-full animate-pulse">
                    <AlertCircle className="w-4 h-4" />
-                   <span>Lendo seus dados...</span>
+                   <span>Isso pode demorar um pouco se o arquivo for grande. Segura a ansiedade!</span>
                 </div>
              </div>
            ) : (
@@ -267,16 +166,8 @@ const BatchEntryModal: React.FC<BatchEntryModalProps> = ({
                 className="border-2 border-dashed border-blue-300 dark:border-blue-700 rounded-xl p-4 flex flex-col items-center justify-center cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-900/20 transition-colors group"
              >
                 <Upload className="w-8 h-8 text-blue-500 mb-2 group-hover:scale-110 transition-transform" />
-                <span className="text-sm font-medium text-blue-700 dark:text-blue-300 text-center">
-                  Clique para enviar Fatura (PDF/Imagem) ou CSV
-                </span>
-                <input 
-                  type="file" 
-                  ref={fileInputRef} 
-                  className="hidden" 
-                  accept="image/*,application/pdf,.csv,text/csv" // Aceita CSV agora
-                  onChange={handleFileUpload} 
-                />
+                <span className="text-sm font-medium text-blue-700 dark:text-blue-300">Clique para enviar Fatura (PDF/Imagem) ou Extrato Bancário</span>
+                <input type="file" ref={fileInputRef} className="hidden" accept="image/*,application/pdf" onChange={handleFileUpload} />
              </div>
            )}
         </div>
