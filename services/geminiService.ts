@@ -1,7 +1,8 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Transaction, Persona, MarketItem } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// CORREÇÃO AQUI: Usando o padrão do Vite (import.meta.env)
+const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
 
 // Helper to get categories string
 const getCatString = (cats: string[]) => cats.join(', ');
