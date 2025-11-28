@@ -1,7 +1,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Transaction, Persona, MarketItem } from "../types";
 
-// CORREÇÃO: Usando a variável de ambiente exposta pelo Vite
+// CORREÇÃO 1: Usando a variável de ambiente correta do Vite
 const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
 
 // Helper to get categories string
@@ -11,23 +11,26 @@ export const analyzeReceiptImage = async (base64Data: string, mimeType: string, 
   try {
     const categoriesStr = getCatString(availableCategories);
     const response = await ai.models.generateContent({
+      // CORREÇÃO 2: Modelo correto gemini-2.5-flash
       model: 'gemini-2.5-flash',
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              mimeType: mimeType, 
-              data: base64Data
+      contents: [
+        {
+          parts: [
+            {
+              inlineData: {
+                mimeType: mimeType, 
+                data: base64Data
+              }
+            },
+            {
+              text: `Analyze this receipt/document. Extract the total amount, the merchant name (as description), the date (YYYY-MM-DD), and categorize it. 
+              IMPORTANT: Try to fit the transaction into one of these existing categories: [${categoriesStr}]. 
+              If it strictly does not fit any, suggest a new short category name in Portuguese.
+              Return JSON.`
             }
-          },
-          {
-            text: `Analyze this receipt/document. Extract the total amount, the merchant name (as description), the date (YYYY-MM-DD), and categorize it. 
-            IMPORTANT: Try to fit the transaction into one of these existing categories: [${categoriesStr}]. 
-            If it strictly does not fit any, suggest a new short category name in Portuguese.
-            Return JSON.`
-          }
-        ]
-      },
+          ]
+        }
+      ],
       config: {
         responseMimeType: "application/json",
         responseSchema: {
@@ -58,29 +61,32 @@ export const analyzeFinancialStatement = async (base64Data: string, mimeType: st
     const exCats = getCatString(expenseCats);
     
     const response = await ai.models.generateContent({
+      // CORREÇÃO 2: Modelo correto gemini-2.5-flash
       model: 'gemini-2.5-flash',
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              mimeType: mimeType, 
-              data: base64Data
+      contents: [
+        {
+          parts: [
+            {
+              inlineData: {
+                mimeType: mimeType, 
+                data: base64Data
+              }
+            },
+            {
+              text: `Analyze this image or document. It is likely a bank statement, credit card bill, or list of transactions.
+              Extract ALL visible transactions into a list.
+              For each transaction:
+              1. Identify date (YYYY-MM-DD). If year is missing, assume current year.
+              2. Description (Merchant name).
+              3. Amount (positive number).
+              4. Type: 'income' (deposits, salaries, positive values in green) or 'expense' (payments, purchases, negative values).
+              5. Category: Choose best fit from [${exCats}] for expenses, or [${inCats}] for income. If none fit, suggest a new Portuguese name.
+              
+              Return a JSON Array of objects.`
             }
-          },
-          {
-            text: `Analyze this image or document. It is likely a bank statement, credit card bill, or list of transactions.
-            Extract ALL visible transactions into a list.
-            For each transaction:
-            1. Identify date (YYYY-MM-DD). If year is missing, assume current year.
-            2. Description (Merchant name).
-            3. Amount (positive number).
-            4. Type: 'income' (deposits, salaries, positive values in green) or 'expense' (payments, purchases, negative values).
-            5. Category: Choose best fit from [${exCats}] for expenses, or [${inCats}] for income. If none fit, suggest a new Portuguese name.
-            
-            Return a JSON Array of objects.`
-          }
-        ]
-      },
+          ]
+        }
+      ],
       config: {
         responseMimeType: "application/json",
         responseSchema: {
@@ -113,27 +119,30 @@ export const analyzeFinancialStatement = async (base64Data: string, mimeType: st
 export const analyzeItemizedReceipt = async (base64Data: string, mimeType: string): Promise<{ merchant: string, date: string, total: number, items: Partial<MarketItem>[] }> => {
   try {
     const response = await ai.models.generateContent({
+      // CORREÇÃO 2: Modelo correto gemini-2.5-flash
       model: 'gemini-2.5-flash',
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              mimeType: mimeType, 
-              data: base64Data
+      contents: [
+        {
+          parts: [
+            {
+              inlineData: {
+                mimeType: mimeType, 
+                data: base64Data
+              }
+            },
+            {
+              text: `Analyze this grocery receipt. Extract the merchant name, date, total amount, and a detailed list of purchased items.
+              For each item, extract:
+              - Name (be specific, e.g., "Cerveja Heineken 350ml")
+              - Category (e.g., "Bebida", "Açougue", "Limpeza", "Hortifruti", "Mercearia")
+              - Price (total price for the item line)
+              - Quantity (if available, otherwise 1)
+              
+              Return JSON.`
             }
-          },
-          {
-            text: `Analyze this grocery receipt. Extract the merchant name, date, total amount, and a detailed list of purchased items.
-            For each item, extract:
-            - Name (be specific, e.g., "Cerveja Heineken 350ml")
-            - Category (e.g., "Bebida", "Açougue", "Limpeza", "Hortifruti", "Mercearia")
-            - Price (total price for the item line)
-            - Quantity (if available, otherwise 1)
-            
-            Return JSON.`
-          }
-        ]
-      },
+          ]
+        }
+      ],
       config: {
         responseMimeType: "application/json",
         responseSchema: {
@@ -257,6 +266,7 @@ export const getFinancialAdvice = async (
   }
 
   const response = await ai.models.generateContent({
+    // CORREÇÃO 2: Modelo correto gemini-2.5-flash
     model: 'gemini-2.5-flash',
     contents: [
       ...history.map(h => ({ role: h.role, parts: h.parts })),
