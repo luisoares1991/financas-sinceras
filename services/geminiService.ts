@@ -11,7 +11,7 @@ export const analyzeReceiptImage = async (base64Data: string, mimeType: string, 
   try {
     const categoriesStr = getCatString(availableCategories);
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-flash-latest',
       contents: {
         parts: [
           {
@@ -58,7 +58,7 @@ export const analyzeFinancialStatement = async (base64Data: string, mimeType: st
     const exCats = getCatString(expenseCats);
     
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-flash-latest',
       contents: {
         parts: [
           {
@@ -113,7 +113,7 @@ export const analyzeFinancialStatement = async (base64Data: string, mimeType: st
 export const analyzeItemizedReceipt = async (base64Data: string, mimeType: string): Promise<{ merchant: string, date: string, total: number, items: Partial<MarketItem>[] }> => {
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-flash-latest',
       contents: {
         parts: [
           {
@@ -226,7 +226,7 @@ export const getFinancialAdvice = async (
   }
 
   const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
+    model: 'gemini-flash-latest',
     contents: [
       ...history.map(h => ({ role: h.role, parts: h.parts })),
       { role: 'user', parts: [{ text: message }] }
